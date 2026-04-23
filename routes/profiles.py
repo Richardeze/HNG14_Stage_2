@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from typing import Optional
 
 from database import get_db
 import models
@@ -12,29 +13,32 @@ router = APIRouter(
     tags=["Profiles"]
 )
 
-@router.get("", response_model=ProfileListResponse)
+
 @router.get("", response_model=ProfileListResponse)
 def get_profiles(
-    gender: str = None,
-    country_id: str = None,
-    age_group: str = None,
-    min_age: int = None,
-    max_age: int = None,
-    min_gender_probability: float = None,
-    min_country_probability: float = None,
-    sort_by: str = None,
+    gender: Optional[str] = None,
+    country_id: Optional[str] = None,
+    age_group: Optional[str] = None,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
+    min_gender_probability: Optional[float] = None,
+    min_country_probability: Optional[float] = None,
+    sort_by: Optional[str] = None,
     order: str = "asc",
     page: int = 1,
     limit: int = 10,
     db: Session = Depends(get_db)
 ):
 
-
     if limit > 50:
         limit = 50
 
-    query = db.query(models.Profile)
+    if page < 1:
+        page = 1
 
+    valid_sort = ["age", "created_at", "gender_probability"]
+
+    query = db.query(models.Profile)
 
     if gender:
         query = query.filter(models.Profile.gender == gender)
@@ -45,31 +49,26 @@ def get_profiles(
     if age_group:
         query = query.filter(models.Profile.age_group == age_group)
 
-    if min_age:
+    if min_age is not None:
         query = query.filter(models.Profile.age >= min_age)
 
-    if max_age:
+    if max_age is not None:
         query = query.filter(models.Profile.age <= max_age)
 
-    if min_gender_probability:
+    if min_gender_probability is not None:
         query = query.filter(models.Profile.gender_probability >= min_gender_probability)
 
-    if min_country_probability:
+    if min_country_probability is not None:
         query = query.filter(models.Profile.country_probability >= min_country_probability)
 
-
-    if not sort_by:
-        query = query.order_by(models.Profile.created_at.desc())
-
-
-    valid_sort = ["age", "created_at", "gender_probability"]
+    query = query.order_by(models.Profile.created_at.desc())
 
     if sort_by:
         if sort_by not in valid_sort:
-            return {
-                "status": "error",
-                "message": "Invalid query parameters"
-            }
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid query parameters"
+            )
 
         column = getattr(models.Profile, sort_by)
 
@@ -80,8 +79,8 @@ def get_profiles(
 
         query = query.order_by(column)
 
-
     total = query.count()
+
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
 
@@ -105,7 +104,10 @@ def search_profiles(
     if limit > 50:
         limit = 50
 
-    q_lower = q.lower()
+    if page < 1:
+        page = 1
+
+    ql = q.lower()
 
     gender = None
     min_age = None
@@ -113,43 +115,45 @@ def search_profiles(
     country_id = None
     age_group = None
 
-
-    if "male" in q_lower and "female" not in q_lower:
+    if "male" in ql and "female" not in ql:
         gender = "male"
-    elif "female" in q_lower and "male" not in q_lower:
+    elif "female" in ql and "male" not in ql:
         gender = "female"
 
-
-    if "young" in q_lower:
+    if "young" in ql:
         min_age, max_age = 16, 24
 
-    if "teen" in q_lower:
+    if "teen" in ql:
         age_group = "teenager"
 
-    if "adult" in q_lower:
+    if "adult" in ql:
         age_group = "adult"
 
+    if "senior" in ql:
+        age_group = "senior"
 
-    words = q_lower.split()
-    for i, word in enumerate(words):
-        if word.isdigit():
-            val = int(word)
+    words = ql.split()
+    for i, w in enumerate(words):
+        if w.isdigit():
+            val = int(w)
 
-            if "above" in q_lower or "over" in q_lower:
+            if "above" in ql or "over" in ql:
                 min_age = val
-            elif "below" in q_lower or "under" in q_lower:
+            elif "below" in ql or "under" in ql:
                 max_age = val
 
+    country_map = {
+        "nigeria": "NG",
+        "kenya": "KE",
+        "ghana": "GH",
+        "angola": "AO",
+        "benin": "BJ"
+    }
 
-    if "nigeria" in q_lower:
-        country_id = "NG"
-    elif "kenya" in q_lower:
-        country_id = "KE"
-    elif "ghana" in q_lower:
-        country_id = "GH"
-    elif "angola" in q_lower:
-        country_id = "AO"
-
+    for k, v in country_map.items():
+        if k in ql:
+            country_id = v
+            break
 
     if not any([gender, min_age, max_age, country_id, age_group]):
         return {
@@ -168,13 +172,14 @@ def search_profiles(
     if age_group:
         query = query.filter(models.Profile.age_group == age_group)
 
-    if min_age:
+    if min_age is not None:
         query = query.filter(models.Profile.age >= min_age)
 
-    if max_age:
+    if max_age is not None:
         query = query.filter(models.Profile.age <= max_age)
 
     total = query.count()
+
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
 
@@ -252,5 +257,3 @@ def delete_profile(id: str, db: Session = Depends(get_db)):
 
     db.delete(profile)
     db.commit()
-
-    return
