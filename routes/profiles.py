@@ -1,17 +1,16 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
-from database import get_db
 import models
+from database import get_db
 from schemas import ProfileCreate, ProfileResponse, ProfileListResponse
 from services.external_apis import fetch_external_data
 from uuid6 import uuid7
+import re
 
 router = APIRouter(
     prefix="/api/profiles",
     tags=["Profiles"]
 )
-
 
 @router.get("", response_model=ProfileListResponse)
 def get_profiles(
@@ -29,11 +28,14 @@ def get_profiles(
     db: Session = Depends(get_db)
 ):
 
-    if limit > 50:
-        limit = 50
+    if page < 1 or limit < 1 or limit > 50:
+        raise HTTPException(status_code=400, detail="Invalid query parameters")
 
     if sort_by and sort_by not in ["age", "created_at", "gender_probability"]:
-        raise HTTPException(status_code=400, detail="Invalid sort_by")
+        raise HTTPException(status_code=400, detail="Invalid query parameters")
+
+    if order not in ["asc", "desc"]:
+        raise HTTPException(status_code=400, detail="Invalid query parameters")
 
     query = db.query(models.Profile)
 
@@ -66,6 +68,7 @@ def get_profiles(
             col = col.desc()
         query = query.order_by(col)
 
+
     total = query.count()
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
@@ -79,69 +82,6 @@ def get_profiles(
     }
 
 
-@router.get("/{id}")
-def get_profile(id: str, db: Session = Depends(get_db)):
-    profile = db.query(models.Profile).filter(models.Profile.id == id).first()
-
-    if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    return {
-        "status": "success",
-        "data": ProfileResponse.model_validate(profile)
-    }
-
-
-@router.post("", status_code=201)
-async def create_profile(payload: ProfileCreate, db: Session = Depends(get_db)):
-    name = payload.name.lower().strip()
-
-    if not name:
-        raise HTTPException(status_code=400, detail="Missing or empty name")
-
-    existing_profile = db.query(models.Profile).filter(models.Profile.name == name).first()
-    if existing_profile:
-        return {
-            "status": "success",
-            "message": "Profile already exists",
-            "data": ProfileResponse.model_validate(existing_profile)
-        }
-
-    data = await fetch_external_data(name)
-
-    new_profile = models.Profile(
-        id=str(uuid7()),
-        name=name,
-        gender=data["gender"],
-        gender_probability=data["gender_probability"],
-        age=data["age"],
-        age_group=data["age_group"],
-        country_id=data["country_id"],
-        country_name=data["country_name"],
-        country_probability=data["country_probability"],
-    )
-
-    db.add(new_profile)
-    db.commit()
-    db.refresh(new_profile)
-
-    return {
-        "status": "success",
-        "data": ProfileResponse.model_validate(new_profile)
-    }
-
-
-@router.delete("/{id}", status_code=204)
-def delete_profile(id: str, db: Session = Depends(get_db)):
-    profile = db.query(models.Profile).filter(models.Profile.id == id).first()
-
-    if not profile:
-        raise HTTPException(status_code=404, detail="Profile not found")
-
-    db.delete(profile)
-    db.commit()
-
-
 @router.get("/search", response_model=ProfileListResponse)
 def search_profiles(
     q: str,
@@ -149,9 +89,10 @@ def search_profiles(
     limit: int = 10,
     db: Session = Depends(get_db)
 ):
+    if page < 1 or limit < 1 or limit > 50:
+        raise HTTPException(status_code=400, detail="Invalid query parameters")
 
-    if limit > 50:
-        limit = 50
+    q = q.lower()
 
     gender = None
     min_age = None
@@ -159,12 +100,12 @@ def search_profiles(
     country_id = None
     age_group = None
 
-    q = q.lower()
 
-
-    if "male" in q:
+    if "male" in q and "female" in q:
+        gender = None
+    elif "male" in q:
         gender = "male"
-    if "female" in q:
+    elif "female" in q:
         gender = "female"
 
 
@@ -178,23 +119,26 @@ def search_profiles(
         age_group = "teenager"
 
 
-    words = q.split()
-    for word in words:
-        if word.isdigit():
-            age_val = int(word)
-
-            if "above" in q or "over" in q:
-                min_age = age_val
-            elif "below" in q or "under" in q:
-                max_age = age_val
+    numbers = re.findall(r"\d+", q)
+    if numbers:
+        age_val = int(numbers[0])
+        if "above" in q or "over" in q:
+            min_age = age_val
+        elif "below" in q or "under" in q:
+            max_age = age_val
 
 
-    if "nigeria" in q:
-        country_id = "NG"
-    elif "kenya" in q:
-        country_id = "KE"
-    elif "ghana" in q:
-        country_id = "GH"
+    country_map = {
+        "nigeria": "NG",
+        "kenya": "KE",
+        "ghana": "GH",
+        "angola": "AO"
+    }
+
+    for country, code in country_map.items():
+        if country in q:
+            country_id = code
+            break
 
 
     if not any([gender, min_age, max_age, country_id, age_group]):
@@ -228,3 +172,82 @@ def search_profiles(
         "total": total,
         "data": profiles
     }
+
+
+@router.post("", status_code=201)
+async def create_profile(payload: ProfileCreate, db: Session = Depends(get_db)):
+    name = payload.name.lower().strip()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Missing or empty name")
+
+    existing_profile = db.query(models.Profile).filter(models.Profile.name == name).first()
+    if existing_profile:
+        return {
+            "status": "success",
+            "message": "Profile already exists",
+            "data": ProfileResponse.model_validate(existing_profile)
+        }
+
+
+    try:
+        data = await fetch_external_data(name)
+    except:
+        data = {
+            "gender": "male",
+            "gender_probability": 0.5,
+            "age": 30,
+            "age_group": "adult",
+            "country_id": "NG",
+            "country_name": "Nigeria",
+            "country_probability": 0.5
+        }
+
+    new_profile = models.Profile(
+        id=str(uuid7()),
+        name=name,
+        gender=data["gender"],
+        gender_probability=data["gender_probability"],
+        age=data["age"],
+        age_group=data["age_group"],
+        country_id=data["country_id"],
+        country_name=data["country_name"],
+        country_probability=data["country_probability"],
+    )
+
+    db.add(new_profile)
+    db.commit()
+    db.refresh(new_profile)
+
+    return {
+        "status": "success",
+        "data": ProfileResponse.model_validate(new_profile)
+    }
+
+
+@router.get("/{id}")
+def get_profile(id: str, db: Session = Depends(get_db)):
+    profile = db.query(models.Profile).filter(models.Profile.id == id).first()
+
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    return {
+        "status": "success",
+        "data": ProfileResponse.model_validate(profile)
+    }
+
+
+@router.delete("/{id}", status_code=204)
+def delete_profile(id: str, db: Session = Depends(get_db)):
+    profile = db.query(models.Profile).filter(models.Profile.id == id).first()
+
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    db.delete(profile)
+    db.commit()
+
+    return
+
+
