@@ -13,6 +13,7 @@ router = APIRouter(
 )
 
 @router.get("", response_model=ProfileListResponse)
+@router.get("", response_model=ProfileListResponse)
 def get_profiles(
     gender: str = None,
     country_id: str = None,
@@ -34,6 +35,7 @@ def get_profiles(
 
     query = db.query(models.Profile)
 
+
     if gender:
         query = query.filter(models.Profile.gender == gender)
 
@@ -43,22 +45,27 @@ def get_profiles(
     if age_group:
         query = query.filter(models.Profile.age_group == age_group)
 
-    if min_age is not None:
+    if min_age:
         query = query.filter(models.Profile.age >= min_age)
 
-    if max_age is not None:
+    if max_age:
         query = query.filter(models.Profile.age <= max_age)
 
-    if min_gender_probability is not None:
+    if min_gender_probability:
         query = query.filter(models.Profile.gender_probability >= min_gender_probability)
 
-    if min_country_probability is not None:
+    if min_country_probability:
         query = query.filter(models.Profile.country_probability >= min_country_probability)
 
-    valid_sort_fields = ["age", "created_at", "gender_probability"]
+
+    if not sort_by:
+        query = query.order_by(models.Profile.created_at.desc())
+
+
+    valid_sort = ["age", "created_at", "gender_probability"]
 
     if sort_by:
-        if sort_by not in valid_sort_fields:
+        if sort_by not in valid_sort:
             return {
                 "status": "error",
                 "message": "Invalid query parameters"
@@ -72,13 +79,9 @@ def get_profiles(
             column = column.asc()
 
         query = query.order_by(column)
-    else:
-
-        query = query.order_by(models.Profile.created_at.desc())
 
 
     total = query.count()
-
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
 
@@ -98,7 +101,11 @@ def search_profiles(
     limit: int = 10,
     db: Session = Depends(get_db)
 ):
-    q = q.lower()
+
+    if limit > 50:
+        limit = 50
+
+    q_lower = q.lower()
 
     gender = None
     min_age = None
@@ -107,39 +114,40 @@ def search_profiles(
     age_group = None
 
 
-    if "male" in q and "female" not in q:
+    if "male" in q_lower and "female" not in q_lower:
         gender = "male"
-    elif "female" in q and "male" not in q:
+    elif "female" in q_lower and "male" not in q_lower:
         gender = "female"
 
-    if "young" in q:
+
+    if "young" in q_lower:
         min_age, max_age = 16, 24
 
-    if "adult" in q:
-        age_group = "adult"
-
-    if "teenager" in q or "teenagers" in q or "teen" in q:
+    if "teen" in q_lower:
         age_group = "teenager"
 
+    if "adult" in q_lower:
+        age_group = "adult"
 
-    words = q.split()
-    for word in words:
+
+    words = q_lower.split()
+    for i, word in enumerate(words):
         if word.isdigit():
-            age_val = int(word)
+            val = int(word)
 
-            if "above" in q or "over" in q:
-                min_age = age_val
-            elif "below" in q or "under" in q:
-                max_age = age_val
+            if "above" in q_lower or "over" in q_lower:
+                min_age = val
+            elif "below" in q_lower or "under" in q_lower:
+                max_age = val
 
 
-    if "nigeria" in q:
+    if "nigeria" in q_lower:
         country_id = "NG"
-    elif "kenya" in q:
+    elif "kenya" in q_lower:
         country_id = "KE"
-    elif "ghana" in q:
+    elif "ghana" in q_lower:
         country_id = "GH"
-    elif "angola" in q:
+    elif "angola" in q_lower:
         country_id = "AO"
 
 
@@ -148,7 +156,6 @@ def search_profiles(
             "status": "error",
             "message": "Unable to interpret query"
         }
-
 
     query = db.query(models.Profile)
 
@@ -161,14 +168,11 @@ def search_profiles(
     if age_group:
         query = query.filter(models.Profile.age_group == age_group)
 
-    if min_age is not None:
+    if min_age:
         query = query.filter(models.Profile.age >= min_age)
 
-    if max_age is not None:
+    if max_age:
         query = query.filter(models.Profile.age <= max_age)
-
-
-    query = query.order_by(models.Profile.created_at.desc())
 
     total = query.count()
     offset = (page - 1) * limit
