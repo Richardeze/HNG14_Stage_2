@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Optional
+
 from database import get_db
 import models
 from schemas import ProfileCreate, ProfileResponse, ProfileListResponse
@@ -8,6 +9,7 @@ from services.external_apis import fetch_external_data
 from uuid6 import uuid7
 
 router = APIRouter(prefix="/api/profiles", tags=["Profiles"])
+
 
 @router.get("", response_model=ProfileListResponse)
 def get_profiles(
@@ -25,11 +27,13 @@ def get_profiles(
     db: Session = Depends(get_db)
 ):
 
-    limit = min(limit, 50)
-    page = max(page, 1)
+    if limit > 50:
+        limit = 50
+
+    if page < 1:
+        page = 1
 
     query = db.query(models.Profile)
-
 
     if gender:
         query = query.filter(models.Profile.gender == gender)
@@ -52,7 +56,6 @@ def get_profiles(
     if min_country_probability is not None:
         query = query.filter(models.Profile.country_probability >= min_country_probability)
 
-
     valid_sort = ["age", "created_at", "gender_probability"]
 
     if sort_by:
@@ -62,126 +65,28 @@ def get_profiles(
                 detail="Invalid query parameters"
             )
 
-        col = getattr(models.Profile, sort_by)
+        column = getattr(models.Profile, sort_by)
 
         if order == "desc":
-            col = col.desc()
+            column = column.desc()
         else:
-            col = col.asc()
+            column = column.asc()
 
-        query = query.order_by(col)
+        query = query.order_by(column)
     else:
         query = query.order_by(models.Profile.created_at.desc())
 
     total = query.count()
     offset = (page - 1) * limit
-    profiles = query.offset(offset).limit(limit).all()
+
+    data = query.offset(offset).limit(limit).all()
 
     return {
         "status": "success",
         "page": page,
         "limit": limit,
         "total": total,
-        "data": profiles
-    }
-
-
-@router.get("/search", response_model=ProfileListResponse)
-def search_profiles(
-    q: str,
-    page: int = 1,
-    limit: int = 10,
-    db: Session = Depends(get_db)
-):
-
-    limit = min(limit, 50)
-    page = max(page, 1)
-
-    ql = q.lower()
-
-    gender = None
-    min_age = None
-    max_age = None
-    country_id = None
-    age_group = None
-
-
-    if "male" in ql and "female" in ql:
-        gender = None
-    elif "male" in ql:
-        gender = "male"
-    elif "female" in ql:
-        gender = "female"
-
-
-    if "young" in ql:
-        min_age, max_age = 16, 24
-
-    if "teen" in ql:
-        age_group = "teenager"
-
-    if "adult" in ql:
-        age_group = "adult"
-
-    if "senior" in ql:
-        age_group = "senior"
-
-    words = ql.split()
-    for i, w in enumerate(words):
-        if w.isdigit():
-            val = int(w)
-            if "above" in ql or "over" in ql:
-                min_age = val
-            elif "below" in ql or "under" in ql:
-                max_age = val
-
-    country_map = {
-        "nigeria": "NG",
-        "kenya": "KE",
-        "ghana": "GH",
-        "angola": "AO",
-        "benin": "BJ"
-    }
-
-    for k, v in country_map.items():
-        if k in ql:
-            country_id = v
-            break
-
-
-    if not any([gender, min_age, max_age, country_id, age_group]):
-        return {
-            "status": "error",
-            "message": "Unable to interpret query"
-        }
-
-    query = db.query(models.Profile)
-
-    if gender:
-        query = query.filter(models.Profile.gender == gender)
-
-    if country_id:
-        query = query.filter(models.Profile.country_id == country_id)
-
-    if age_group:
-        query = query.filter(models.Profile.age_group == age_group)
-
-    if min_age is not None:
-        query = query.filter(models.Profile.age >= min_age)
-
-    if max_age is not None:
-        query = query.filter(models.Profile.age <= max_age)
-
-    total = query.count()
-    offset = (page - 1) * limit
-    profiles = query.offset(offset).limit(limit).all()
-
-    return {
-        "status": "success",
-        "page": page,
-        "limit": limit,
-        "total": total,
-        "data": profiles
+        "data": data
     }
 
 
@@ -190,9 +95,6 @@ def search_profiles(
 async def create_profile(payload: ProfileCreate, db: Session = Depends(get_db)):
 
     name = payload.name.lower().strip()
-
-    if not name:
-        raise HTTPException(status_code=400, detail="Missing or empty name")
 
     existing = db.query(models.Profile).filter(models.Profile.name == name).first()
 
@@ -226,6 +128,107 @@ async def create_profile(payload: ProfileCreate, db: Session = Depends(get_db)):
         "data": ProfileResponse.model_validate(new_profile)
     }
 
+
+@router.get("/search", response_model=ProfileListResponse)
+def search_profiles(
+    q: str = Query(...),
+    page: int = 1,
+    limit: int = 10,
+    db: Session = Depends(get_db)
+):
+
+    if not q or q.strip() == "":
+        raise HTTPException(status_code=400, detail="Invalid query parameters")
+
+    ql = q.lower()
+
+    gender = None
+    min_age = None
+    max_age = None
+    country_id = None
+    age_group = None
+
+
+    if "male" in ql and "female" not in ql:
+        gender = "male"
+    elif "female" in ql and "male" not in ql:
+        gender = "female"
+
+
+    if "young" in ql:
+        min_age, max_age = 16, 24
+
+    if "teenager" in ql or "teen" in ql:
+        age_group = "teenager"
+
+    if "adult" in ql:
+        age_group = "adult"
+
+    if "senior" in ql:
+        age_group = "senior"
+
+
+    words = ql.split()
+    for i, w in enumerate(words):
+        if w.isdigit():
+            val = int(w)
+
+            if "above" in ql or "over" in ql:
+                min_age = val
+            elif "below" in ql or "under" in ql:
+                max_age = val
+
+
+    country_map = {
+        "nigeria": "NG",
+        "kenya": "KE",
+        "ghana": "GH",
+        "angola": "AO",
+        "benin": "BJ"
+    }
+
+    for k, v in country_map.items():
+        if k in ql:
+            country_id = v
+            break
+
+    if not any([gender, min_age, max_age, country_id, age_group]):
+        return {
+            "status": "error",
+            "message": "Unable to interpret query"
+        }
+
+    query = db.query(models.Profile)
+
+    if gender:
+        query = query.filter(models.Profile.gender == gender)
+
+    if country_id:
+        query = query.filter(models.Profile.country_id == country_id)
+
+    if age_group:
+        query = query.filter(models.Profile.age_group == age_group)
+
+    if min_age is not None:
+        query = query.filter(models.Profile.age >= min_age)
+
+    if max_age is not None:
+        query = query.filter(models.Profile.age <= max_age)
+
+    total = query.count()
+    offset = (page - 1) * limit
+
+    data = query.offset(offset).limit(limit).all()
+
+    return {
+        "status": "success",
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "data": data
+    }
+
+
 @router.get("/{id}")
 def get_profile(id: str, db: Session = Depends(get_db)):
 
@@ -250,5 +253,3 @@ def delete_profile(id: str, db: Session = Depends(get_db)):
 
     db.delete(profile)
     db.commit()
-
-    return
