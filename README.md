@@ -8,7 +8,7 @@ This project is a demographic intelligence API that supports:
 - Natural language query parsing
 
 ## API Base URL
-https://richardeze-hng-stage-2.hf.space/docs
+https://hng-14-stage-2-psi.vercel.app/
 
 ---
 
