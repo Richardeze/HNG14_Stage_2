@@ -103,7 +103,6 @@ def search_profiles(
 
     if limit > 50:
         limit = 50
-
     if page < 1:
         page = 1
 
@@ -115,6 +114,7 @@ def search_profiles(
     country_id = None
     age_group = None
 
+
     if "male" in ql and "female" not in ql:
         gender = "male"
     elif "female" in ql and "male" not in ql:
@@ -122,15 +122,13 @@ def search_profiles(
 
     if "young" in ql:
         min_age, max_age = 16, 24
-
-    if "teen" in ql:
+    elif "teenager" in ql or "teen" in ql:
         age_group = "teenager"
-
-    if "adult" in ql:
+    elif "adult" in ql:
         age_group = "adult"
-
-    if "senior" in ql:
+    elif "senior" in ql:
         age_group = "senior"
+
 
     words = ql.split()
     for i, w in enumerate(words):
@@ -155,11 +153,16 @@ def search_profiles(
             country_id = v
             break
 
+
     if not any([gender, min_age, max_age, country_id, age_group]):
         return {
-            "status": "error",
-            "message": "Unable to interpret query"
+            "status": "success",
+            "page": page,
+            "limit": limit,
+            "total": 0,
+            "data": []
         }
+
 
     query = db.query(models.Profile)
 
@@ -179,7 +182,6 @@ def search_profiles(
         query = query.filter(models.Profile.age <= max_age)
 
     total = query.count()
-
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
 
@@ -190,6 +192,7 @@ def search_profiles(
         "total": total,
         "data": profiles
     }
+
 
 
 @router.get("/{id}")
